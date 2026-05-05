@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Cassa"/>
+<meta name="theme-color" content="#0a0a0f"/>
+<title>Cassa Forfettario</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:#0a0a0f;color:#e4e4e7;font-family:'DM Mono','Courier New',monospace;min-height:100vh;min-height:100dvh;}
+  input,select{outline:none;-webkit-appearance:none;}
+  ::-webkit-scrollbar{width:4px;}
+  ::-webkit-scrollbar-track{background:#0a0a0f;}
+  ::-webkit-scrollbar-thumb{background:#3f3f46;border-radius:2px;}
+  .field{background:#18181b;border:1px solid #3f3f46;border-radius:10px;padding:10px 14px;color:#e4e4e7;font-family:'DM Mono',monospace;font-size:14px;width:100%;transition:border-color .2s;}
+  .field:focus{border-color:#f59e0b;}
+  .btn{padding:10px 20px;border-radius:10px;border:none;cursor:pointer;font-family:'DM Mono',monospace;font-size:13px;font-weight:500;transition:all .15s;}
+  .btn-primary{background:#f59e0b;color:#000;}
+  .btn-primary:hover{background:#fbbf24;}
+  .btn-secondary{background:#27272a;color:#a1a1aa;border:1px solid #3f3f46;}
+  .btn-secondary:hover{background:#3f3f46;color:#fff;}
+  .bar{height:4px;border-radius:2px;background:#27272a;overflow:hidden;}
+  .bar-fill{height:100%;border-radius:2px;transition:width .6s ease;}
+  .conto-card{border:1px solid #27272a;border-radius:14px;padding:16px;background:#111118;transition:border-color .2s;}
+  .conto-card:hover{border-color:#3f3f46;}
+  .tab-btn{transition:all .2s;}
+  .tab-btn:hover{color:#fff;}
+  .tag{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid;}
+  .tag-green{background:rgba(16,185,129,.1);color:#34d399;border-color:rgba(16,185,129,.2);}
+  .tag-red{background:rgba(239,68,68,.1);color:#f87171;border-color:rgba(239,68,68,.2);}
+  .tag-yellow{background:rgba(245,158,11,.1);color:#fbbf24;border-color:rgba(245,158,11,.2);}
+  .tag-blue{background:rgba(59,130,246,.1);color:#93c5fd;border-color:rgba(59,130,246,.2);}
+  /* safe area per iPhone notch */
+  .header{padding: max(20px, env(safe-area-inset-top)) 20px 16px;}
+  .content{padding:20px;padding-bottom:max(20px,env(safe-area-inset-bottom));}
+  .tabs{padding:10px 20px;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;}
+  .tabs::-webkit-scrollbar{display:none;}
+  @media(max-width:600px){
+    .grid2{grid-template-columns:1fr!important;}
+    .grid3{grid-template-columns:1fr 1fr!important;}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// ── COSTANTI FISCALI ──────────────────────────────────────────────────
+const COEFF = 0.78;
+const IRPEF_RATE = 0.15;
+const INPS_RATE = 0.2623;
+const IRPEF_EFF = COEFF * IRPEF_RATE;
+const INPS_EFF  = COEFF * INPS_RATE;
+const TOTALE_EFF = IRPEF_EFF + INPS_EFF;
+
+// ── UTILS ─────────────────────────────────────────────────────────────
+const fmt = n => new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR'}).format(n||0);
+const pct = n => `${(n*100).toFixed(1)}%`;
+const today = () => new Date().toISOString().split('T')[0];
+const KEY = 'mirko_cashflow_v2';
+const load = () => { try{ const r=localStorage.getItem(KEY); return r?JSON.parse(r):null; }catch{return null;} };
+const save = s => { try{ localStorage.setItem(KEY,JSON.stringify(s)); }catch{} };
+
+const DEFAULT_NOMI = { bper:'BPER Principale', bper2:'BPER 2', bper3:'BPER 3', traderepublic:'Trade Republic', metatrader:'MetaTrader' };
+const CONTI_IDS = ['bper','bper2','bper3','traderepublic','metatrader'];
+const CONTI_EMOJI = { bper:'🏦', bper2:'🏦', bper3:'🏦', traderepublic:'📈', metatrader:'💹' };
+const CONTI_HINT = { bper:'Conto principale fatture', bper2:'Secondo conto BPER', bper3:'Terzo conto BPER', traderepublic:'Investimenti/ETF', metatrader:'Solo tracciato' };
+const COLORI = { bper:'#3b82f6', bper2:'#60a5fa', bper3:'#93c5fd', traderepublic:'#10b981', metatrader:'#8b5cf6' };
+
+const DEFAULT_STATE = {
+  conti:{ bper:0, bper2:0, bper3:0, traderepublic:0, metatrader:0 },
+  nomiConti:{ ...DEFAULT_NOMI },
+  tasse_accantonate:0,
+  fatture:[],
+  movimenti:[],
+};
+
+// ── FIELD LABEL ───────────────────────────────────────────────────────
+function FL({label,children}){
+  return (
+    <div>
+      <div style={{fontSize:'11px',color:'#71717a',marginBottom:'5px',textTransform:'uppercase',letterSpacing:'1px'}}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+// ── APP ───────────────────────────────────────────────────────────────
+function App(){
+  const [state, setState] = useState(() => { const s=load(); return s ? {...DEFAULT_STATE,...s} : DEFAULT_STATE; });
+  const [tab, setTab] = useState(() => {
+    const s=load();
+    if(!s || CONTI_IDS.every(k=>!s.conti?.[k]) && !s.tasse_accantonate) return 'setup';
+    return 'dashboard';
+  });
+
+  const nomiConti = { ...DEFAULT_NOMI, ...(state.nomiConti||{}) };
+
+  // ── Setup form ──
+  const [setup, setSetup] = useState(() => {
+    const s=load();
+    return {
+      bper: s?.conti?.bper||'', bper2: s?.conti?.bper2||'', bper3: s?.conti?.bper3||'',
+      traderepublic: s?.conti?.traderepublic||'', metatrader: s?.conti?.metatrader||'',
+      tasse_accantonate: s?.tasse_accantonate||'',
+      anno: new Date().getFullYear().toString(),
+      nome_bper: s?.nomiConti?.bper||DEFAULT_NOMI.bper,
+      nome_bper2: s?.nomiConti?.bper2||DEFAULT_NOMI.bper2,
+      nome_bper3: s?.nomiConti?.bper3||DEFAULT_NOMI.bper3,
+      nome_traderepublic: s?.nomiConti?.traderepublic||DEFAULT_NOMI.traderepublic,
+      nome_metatrader: s?.nomiConti?.metatrader||DEFAULT_NOMI.metatrader,
+    };
+  });
+  const [setupOk, setSetupOk] = useState(false);
+
+  // ── Fattura form ──
+  const [fatt, setFatt] = useState({ numero:'', cliente:'', importo:'', data:today(), cuscinetto:'10', dest:'traderepublic', modalita:'distribuisci' });
+
+  // ── Movimento form ──
+  const [mov, setMov] = useState({ da:'bper', a:'traderepublic', importo:'', nota:'' });
+
+  useEffect(()=>{ save(state); },[state]);
+
+  // Calcoli fattura
+  const imp = parseFloat(fatt.importo)||0;
+  const tasseF = imp * TOTALE_EFF;
+  const irpefF = imp * IRPEF_EFF;
+  const inpsF  = imp * INPS_EFF;
+  const cuscF  = imp * (parseFloat(fatt.cuscinetto)||0) / 100;
+  const trasfF = Math.max(0, imp - tasseF - cuscF);
+
+  const salvaSetup = () => {
+    const p = v => parseFloat(v)||0;
+    setState(prev => ({
+      ...prev,
+      conti:{ bper:p(setup.bper), bper2:p(setup.bper2), bper3:p(setup.bper3), traderepublic:p(setup.traderepublic), metatrader:p(setup.metatrader) },
+      nomiConti:{ bper:setup.nome_bper||DEFAULT_NOMI.bper, bper2:setup.nome_bper2||DEFAULT_NOMI.bper2, bper3:setup.nome_bper3||DEFAULT_NOMI.bper3, traderepublic:setup.nome_traderepublic||DEFAULT_NOMI.traderepublic, metatrader:setup.nome_metatrader||DEFAULT_NOMI.metatrader },
+      tasse_accantonate: p(setup.tasse_accantonate),
+      movimenti:[{ id:Date.now(), tipo:'setup', data:today(), nota:`Saldi iniziali ${setup.anno}`, da:'esterno', a:'tutti', importo:CONTI_IDS.reduce((s,k)=>s+p(setup[k]),0) }, ...prev.movimenti],
+    }));
+    setSetupOk(true);
+    setTimeout(()=>{ setSetupOk(false); setTab('dashboard'); }, 1200);
+  };
+
+  const registraFattura = () => {
+    if(!imp||!fatt.cliente) return;
+    const id = Date.now();
+    const nf = { id, numero:fatt.numero||`F-${id}`, cliente:fatt.cliente, importo:imp, data:fatt.data, tasse:tasseF, irpef:irpefF, inps:inpsF, cuscinetto:cuscF, trasferibile:trasfF, destinazione:fatt.dest, modalita:fatt.modalita };
+
+    if(fatt.modalita === 'archivia') {
+      // Solo storico, nessuna modifica ai saldi
+      setState(prev => ({
+        ...prev,
+        fatture:[nf,...prev.fatture],
+        movimenti:[{ id:id+1, tipo:'archiviata', data:fatt.data, nota:`Archiviata ${nf.numero} – ${fatt.cliente} (saldi già inclusi)`, da:'—', a:'—', importo:imp }, ...prev.movimenti],
+      }));
+    } else {
+      // Distribuisci: aggiorna saldi e sposta il netto
+      setState(prev => {
+        const c = {...prev.conti};
+        c.bper = (c.bper||0) + imp;
+        c[fatt.dest] = (c[fatt.dest]||0) + trasfF;
+        c.bper -= trasfF;
+        return {
+          ...prev, conti:c, tasse_accantonate: prev.tasse_accantonate + tasseF,
+          fatture:[nf,...prev.fatture],
+          movimenti:[
+            { id:id+1, tipo:'fattura', data:fatt.data, nota:`Fattura ${nf.numero} – ${fatt.cliente}`, da:'esterno', a:'bper', importo:imp },
+            { id:id+2, tipo:'trasferimento', data:fatt.data, nota:`→ ${nomiConti[fatt.dest]}`, da:'bper', a:fatt.dest, importo:trasfF },
+            ...prev.movimenti
+          ],
+        };
+      });
+    }
+    setFatt({ numero:'', cliente:'', importo:'', data:today(), cuscinetto:'10', dest:'traderepublic', modalita:fatt.modalita });
+  };
+
+  const eseguiMov = () => {
+    const i = parseFloat(mov.importo)||0;
+    if(!i || mov.da===mov.a) return;
+    setState(prev => {
+      const c={...prev.conti};
+      c[mov.da]=(c[mov.da]||0)-i;
+      c[mov.a]=(c[mov.a]||0)+i;
+      return { ...prev, conti:c, movimenti:[{ id:Date.now(), tipo:'manuale', data:today(), nota:mov.nota||'Movimento manuale', da:mov.da, a:mov.a, importo:i },...prev.movimenti] };
+    });
+    setMov({ da:'bper', a:'traderepublic', importo:'', nota:'' });
+  };
+
+  const resetTutto = () => { if(confirm('Cancellare tutti i dati?')) setState(DEFAULT_STATE); };
+
+  const totale = CONTI_IDS.reduce((s,k)=>s+(state.conti[k]||0),0);
+
+  const TABS = [
+    {id:'setup',label:'⚙ Setup'},
+    {id:'dashboard',label:'Dashboard'},
+    {id:'fattura',label:'Fattura'},
+    {id:'movimenti',label:'Movimenti'},
+    {id:'storico',label:'Storico'},
+  ];
+
+  return (
+    <div style={{minHeight:'100vh',minHeight:'100dvh',background:'#0a0a0f',color:'#e4e4e7',fontFamily:"'DM Mono',monospace"}}>
+
+      {/* HEADER */}
+      <div className="header" style={{borderBottom:'1px solid #1c1c24',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:'20px',fontWeight:800,letterSpacing:'-0.5px'}}>
+            CASSA <span style={{color:'#f59e0b'}}>FORFETTARIO</span>
+          </div>
+          <div style={{fontSize:'10px',color:'#52525b',marginTop:'2px'}}>IRPEF 15% · INPS 26.23% · Coeff. 78%</div>
+        </div>
+        <div style={{textAlign:'right'}}>
+          <div style={{fontSize:'10px',color:'#52525b'}}>PATRIMONIO</div>
+          <div style={{fontFamily:"'Syne',sans-serif",fontSize:'18px',fontWeight:700,color:'#f59e0b'}}>{fmt(totale)}</div>
+        </div>
+      </div>
+
+      {/* TABS */}
+      <div className="tabs" style={{borderBottom:'1px solid #1c1c24',display:'flex',gap:'4px'}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} className="tab-btn btn" style={{
+            background:tab===t.id?'#1c1c24':'transparent',
+            color:tab===t.id?'#f59e0b':'#71717a',
+            border:tab===t.id?'1px solid #3f3f46':'1px solid transparent',
+            fontSize:'11px',padding:'7px 12px',flexShrink:0,
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* CONTENT */}
+      <div className="content">
+
+        {/* ══ SETUP ══════════════════════════════════════════════════════ */}
+        {tab==='setup' && (
+          <div style={{maxWidth:'520px',display:'flex',flexDirection:'column',gap:'20px'}}>
+            <div>
+              <div style={{fontFamily:"'Syne',sans-serif",fontSize:'17px',fontWeight:800,marginBottom:'5px'}}>Situazione di partenza</div>
+              <div style={{fontSize:'12px',color:'#52525b',lineHeight:1.6}}>Inserisci i saldi reali e le tasse già accantonate. Puoi aggiornare in qualsiasi momento.</div>
+            </div>
+
+            <FL label="Anno di riferimento">
+              <input className="field" style={{maxWidth:'120px'}} value={setup.anno} onChange={e=>setSetup(p=>({...p,anno:e.target.value}))}/>
+            </FL>
+
+            <div>
+              <div style={{fontSize:'12px',color:'#a1a1aa',marginBottom:'10px',fontWeight:500}}>Conti — Nome · Saldo attuale</div>
+              <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+                {CONTI_IDS.map(k=>(
+                  <div key={k} style={{background:'#111118',border:'1px solid #27272a',borderRadius:'12px',padding:'12px 14px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}>
+                      <span style={{fontSize:'18px'}}>{CONTI_EMOJI[k]}</span>
+                      <input className="field" placeholder="Nome conto" style={{flex:1,fontSize:'13px'}}
+                        value={setup[`nome_${k}`]} onChange={e=>setSetup(p=>({...p,[`nome_${k}`]:e.target.value}))}/>
+                      <input className="field" type="number" placeholder="0.00" style={{width:'120px',textAlign:'right'}}
+                        value={setup[k]} onChange={e=>setSetup(p=>({...p,[k]:e.target.value}))}/>
+                    </div>
+                    <div style={{fontSize:'10px',color:'#52525b',paddingLeft:'28px'}}>{CONTI_HINT[k]}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{background:'#110e00',border:'1px solid #78350f',borderRadius:'14px',padding:'14px',display:'flex',alignItems:'center',gap:'12px'}}>
+              <span style={{fontSize:'22px'}}>🏛️</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'12px',color:'#fbbf24',fontWeight:500}}>Tasse già accantonate</div>
+                <div style={{fontSize:'10px',color:'#92400e'}}>IRPEF + INPS messi da parte finora</div>
+              </div>
+              <input className="field" type="number" placeholder="0.00"
+                style={{width:'120px',textAlign:'right',background:'#1a1000',borderColor:'#78350f'}}
+                value={setup.tasse_accantonate} onChange={e=>setSetup(p=>({...p,tasse_accantonate:e.target.value}))}/>
+            </div>
+
+            {/* Preview */}
+            {CONTI_IDS.some(k=>parseFloat(setup[k])>0) && (
+              <div style={{background:'#0d1117',border:'1px solid #30363d',borderRadius:'12px',padding:'14px'}}>
+                <div style={{fontSize:'11px',color:'#52525b',marginBottom:'8px',textTransform:'uppercase',letterSpacing:'1px'}}>Riepilogo</div>
+                {CONTI_IDS.filter(k=>parseFloat(setup[k])>0).map(k=>(
+                  <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',borderBottom:'1px solid #1c2128'}}>
+                    <span style={{fontSize:'12px',color:'#71717a'}}>{setup[`nome_${k}`]||DEFAULT_NOMI[k]}</span>
+                    <span style={{fontSize:'12px',color:'#f4f4f5'}}>{fmt(parseFloat(setup[k]))}</span>
+                  </div>
+                ))}
+                <div style={{display:'flex',justifyContent:'space-between',paddingTop:'8px'}}>
+                  <span style={{fontSize:'12px',color:'#a1a1aa',fontWeight:600}}>Totale</span>
+                  <span style={{fontSize:'14px',color:'#f59e0b',fontWeight:700}}>{fmt(CONTI_IDS.reduce((s,k)=>s+(parseFloat(setup[k])||0),0))}</span>
+                </div>
+              </div>
+            )}
+
+            <button onClick={salvaSetup} className="btn btn-primary" style={{padding:'13px',fontSize:'14px'}}>
+              {setupOk ? '✓ Salvato!' : 'Salva e vai alla Dashboard'}
+            </button>
+          </div>
+        )}
+
+        {/* ══ DASHBOARD ══════════════════════════════════════════════════ */}
+        {tab==='dashboard' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+
+            <div style={{background:'#110e00',border:'1px solid #78350f',borderRadius:'16px',padding:'18px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'10px',color:'#92400e',textTransform:'uppercase',letterSpacing:'2px',marginBottom:'5px'}}>Tasse accantonate</div>
+                <div style={{fontFamily:"'Syne',sans-serif",fontSize:'28px',fontWeight:800,color:'#fbbf24'}}>{fmt(state.tasse_accantonate)}</div>
+                <div style={{fontSize:'10px',color:'#92400e',marginTop:'3px'}}>IRPEF {pct(IRPEF_EFF)} + INPS {pct(INPS_EFF)}</div>
+              </div>
+              <div style={{fontSize:'36px'}}>🏛️</div>
+            </div>
+
+            <div className="grid3" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:'10px'}}>
+              {CONTI_IDS.map(id=>{
+                const saldo = state.conti[id]||0;
+                const pp = totale>0 ? (saldo/totale)*100 : 0;
+                return (
+                  <div key={id} className="conto-card">
+                    <div style={{fontSize:'9px',color:'#52525b',textTransform:'uppercase',letterSpacing:'1px',marginBottom:'6px'}}>{nomiConti[id]}</div>
+                    <div style={{fontSize:'16px',fontWeight:500,color:'#fff',marginBottom:'8px'}}>{fmt(saldo)}</div>
+                    <div className="bar"><div className="bar-fill" style={{width:`${Math.min(100,pp)}%`,background:COLORI[id]}}/></div>
+                    <div style={{fontSize:'9px',color:'#52525b',marginTop:'4px'}}>{pp.toFixed(1)}%</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {state.fatture.length>0 && (
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px'}}>
+                {[
+                  {label:'Fatturato',value:fmt(state.fatture.reduce((s,f)=>s+f.importo,0))},
+                  {label:'Fatture',value:state.fatture.length},
+                  {label:'Media',value:fmt(state.fatture.reduce((s,f)=>s+f.importo,0)/state.fatture.length)},
+                ].map(s=>(
+                  <div key={s.label} style={{background:'#111118',border:'1px solid #27272a',borderRadius:'12px',padding:'12px'}}>
+                    <div style={{fontSize:'9px',color:'#52525b',textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{s.label}</div>
+                    <div style={{fontSize:'16px',fontWeight:500,color:'#f4f4f5'}}>{s.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={resetTutto} className="btn btn-secondary" style={{fontSize:'11px',alignSelf:'flex-start'}}>↺ Reset dati</button>
+          </div>
+        )}
+
+        {/* ══ NUOVA FATTURA ══════════════════════════════════════════════ */}
+        {tab==='fattura' && (
+          <div className="grid2" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'20px'}}>
+            <div style={{display:'flex',flexDirection:'column',gap:'13px'}}>
+              <div style={{fontFamily:"'Syne',sans-serif",fontSize:'16px',fontWeight:700}}>Registra Fattura</div>
+
+              {/* Toggle modalità */}
+              <div style={{display:'flex',borderRadius:'10px',overflow:'hidden',border:'1px solid #3f3f46',background:'#18181b'}}>
+                {[
+                  {val:'distribuisci', label:'Distribuisci', hint:'Aggiorna i saldi'},
+                  {val:'archivia', label:'Solo archivia', hint:'Saldi già inclusi'},
+                ].map(o=>(
+                  <button key={o.val} onClick={()=>setFatt(p=>({...p,modalita:o.val}))}
+                    style={{flex:1,padding:'10px 8px',border:'none',cursor:'pointer',fontFamily:"'DM Mono',monospace",fontSize:'11px',fontWeight:500,transition:'all .15s',
+                      background: fatt.modalita===o.val ? (o.val==='distribuisci'?'#f59e0b':'#1e3a5f') : 'transparent',
+                      color: fatt.modalita===o.val ? (o.val==='distribuisci'?'#000':'#93c5fd') : '#52525b',
+                    }}>
+                    <div>{o.label}</div>
+                    <div style={{fontSize:'9px',opacity:.7,marginTop:'1px'}}>{o.hint}</div>
+                  </button>
+                ))}
+              </div>
+              <FL label="N° Fattura"><input className="field" placeholder="es. 001/2025" value={fatt.numero} onChange={e=>setFatt(p=>({...p,numero:e.target.value}))}/></FL>
+              <FL label="Cliente"><input className="field" placeholder="Ragione sociale" value={fatt.cliente} onChange={e=>setFatt(p=>({...p,cliente:e.target.value}))}/></FL>
+              <FL label="Importo (€)"><input className="field" type="number" placeholder="0.00" value={fatt.importo} onChange={e=>setFatt(p=>({...p,importo:e.target.value}))}/></FL>
+              <FL label="Data incasso"><input className="field" type="date" value={fatt.data} onChange={e=>setFatt(p=>({...p,data:e.target.value}))}/></FL>
+              {fatt.modalita==='distribuisci' && (<>
+              <FL label="Cuscinetto BPER (%)"><input className="field" type="number" min="0" max="50" value={fatt.cuscinetto} onChange={e=>setFatt(p=>({...p,cuscinetto:e.target.value}))}/></FL>
+              <FL label="Trasferisci netto su">
+                <select className="field" value={fatt.dest} onChange={e=>setFatt(p=>({...p,dest:e.target.value}))}>
+                  {['traderepublic','metatrader','bper2','bper3'].map(id=>(
+                    <option key={id} value={id}>{nomiConti[id]}</option>
+                  ))}
+                </select>
+              </FL>
+              </>)}
+              {fatt.modalita==='archivia' && (
+                <div style={{background:'#0f1721',border:'1px solid #1e3a5f',borderRadius:'10px',padding:'11px 14px',fontSize:'11px',color:'#93c5fd',lineHeight:1.5}}>
+                  ℹ️ La fattura verrà archiviata nello storico con il calcolo delle tasse, ma i saldi dei conti non verranno modificati.
+                </div>
+              )}
+              <button onClick={registraFattura} className="btn btn-primary" style={{marginTop:'4px',background:fatt.modalita==='archivia'?'#1e3a5f':undefined,color:fatt.modalita==='archivia'?'#93c5fd':undefined}}>
+                {fatt.modalita==='archivia' ? '📁 Archivia senza distribuire' : '✓ Registra e distribuisci'}
+              </button>
+            </div>
+
+            <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
+              <div style={{fontFamily:"'Syne',sans-serif",fontSize:'16px',fontWeight:700}}>Simulazione</div>
+              {imp>0 ? (
+                <>
+                  <div style={{background:'#111118',border:'1px solid #27272a',borderRadius:'14px',overflow:'hidden'}}>
+                    {[
+                      {label:'Fattura lorda',value:fmt(imp),color:'#f4f4f5',bg:'transparent'},
+                      {label:`INPS (${pct(INPS_EFF)})`,value:`- ${fmt(inpsF)}`,color:'#f87171',bg:'transparent'},
+                      {label:`IRPEF (${pct(IRPEF_EFF)})`,value:`- ${fmt(irpefF)}`,color:'#f87171',bg:'transparent'},
+                      {label:`Cuscinetto (${fatt.cuscinetto}%)`,value:`- ${fmt(cuscF)}`,color:'#fbbf24',bg:'transparent'},
+                      {label:`→ ${nomiConti[fatt.dest]}`,value:fmt(trasfF),color:'#34d399',bg:'#0d1f17',w:600},
+                    ].map(({label,value,color,bg,w})=>(
+                      <div key={label} style={{display:'flex',justifyContent:'space-between',padding:'11px 14px',borderBottom:'1px solid #1c1c24',background:bg}}>
+                        <span style={{fontSize:'11px',color:'#71717a'}}>{label}</span>
+                        <span style={{fontSize:'12px',color,fontWeight:w||400}}>{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{background:'#0f1721',border:'1px solid #1e3a5f',borderRadius:'12px',padding:'13px'}}>
+                    <div style={{fontSize:'10px',color:'#3b82f6',marginBottom:'5px',textTransform:'uppercase',letterSpacing:'1px'}}>Rimane su {nomiConti.bper}</div>
+                    <div style={{fontSize:'20px',fontWeight:600,color:'#93c5fd'}}>{fmt(tasseF+cuscF)}</div>
+                    <div style={{fontSize:'10px',color:'#1e40af',marginTop:'3px'}}>tasse + cuscinetto</div>
+                  </div>
+                </>
+              ) : (
+                <div style={{color:'#3f3f46',fontSize:'13px',paddingTop:'16px'}}>Inserisci un importo per la simulazione</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ══ MOVIMENTI ══════════════════════════════════════════════════ */}
+        {tab==='movimenti' && (
+          <div className="grid2" style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'20px'}}>
+            <div style={{display:'flex',flexDirection:'column',gap:'13px'}}>
+              <div style={{fontFamily:"'Syne',sans-serif",fontSize:'16px',fontWeight:700}}>Movimento Manuale</div>
+              {['da','a'].map(k=>(
+                <FL key={k} label={k==='da'?'Da':'A'}>
+                  <select className="field" value={mov[k]} onChange={e=>setMov(p=>({...p,[k]:e.target.value}))}>
+                    {CONTI_IDS.map(id=><option key={id} value={id}>{nomiConti[id]}</option>)}
+                  </select>
+                </FL>
+              ))}
+              <FL label="Importo (€)"><input className="field" type="number" placeholder="0.00" value={mov.importo} onChange={e=>setMov(p=>({...p,importo:e.target.value}))}/></FL>
+              <FL label="Nota"><input className="field" placeholder="Opzionale" value={mov.nota} onChange={e=>setMov(p=>({...p,nota:e.target.value}))}/></FL>
+              <button onClick={eseguiMov} className="btn btn-primary">→ Esegui</button>
+            </div>
+
+            <div>
+              <div style={{fontFamily:"'Syne',sans-serif",fontSize:'16px',fontWeight:700,marginBottom:'14px'}}>Saldi</div>
+              <div style={{display:'flex',flexDirection:'column',gap:'7px'}}>
+                {CONTI_IDS.map(id=>(
+                  <div key={id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'11px 14px',background:'#111118',border:'1px solid #27272a',borderRadius:'10px'}}>
+                    <span style={{fontSize:'11px',color:'#71717a'}}>{nomiConti[id]}</span>
+                    <span style={{fontSize:'14px',color:(state.conti[id]||0)>=0?'#f4f4f5':'#f87171',fontWeight:500}}>{fmt(state.conti[id]||0)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══ STORICO ════════════════════════════════════════════════════ */}
+        {tab==='storico' && (
+          <div style={{display:'flex',flexDirection:'column',gap:'18px'}}>
+            <div style={{fontFamily:"'Syne',sans-serif",fontSize:'16px',fontWeight:700}}>Fatture ({state.fatture.length})</div>
+            {state.fatture.length===0
+              ? <div style={{color:'#3f3f46',fontSize:'13px'}}>Nessuna fattura registrata.</div>
+              : state.fatture.map(f=>(
+                <div key={f.id} style={{background:'#111118',border:'1px solid #27272a',borderRadius:'14px',padding:'14px'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+                    <div>
+                      <div style={{fontSize:'13px',fontWeight:500,color:'#f4f4f5'}}>{f.cliente}</div>
+                      <div style={{fontSize:'10px',color:'#52525b'}}>{f.numero} · {f.data}</div>
+                    </div>
+                    <div style={{fontSize:'15px',fontWeight:600,color:'#fff'}}>{fmt(f.importo)}</div>
+                  </div>
+                  <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                    {f.modalita==='archivia'
+                      ? <span className="tag tag-blue">📁 Archiviata · tasse non conteggiate nei saldi</span>
+                      : (<>
+                        <span className="tag tag-red">INPS {fmt(f.inps)}</span>
+                        <span className="tag tag-yellow">IRPEF {fmt(f.irpef)}</span>
+                        <span className="tag tag-blue">Cusc. {fmt(f.cuscinetto)}</span>
+                        <span className="tag tag-green">→ {nomiConti[f.destinazione]} {fmt(f.trasferibile)}</span>
+                      </>)
+                    }
+                  </div>
+                </div>
+              ))
+            }
+
+            <div style={{fontFamily:"'Syne',sans-serif",fontSize:'16px',fontWeight:700,marginTop:'4px'}}>Log movimenti ({state.movimenti.length})</div>
+            {state.movimenti.length===0
+              ? <div style={{color:'#3f3f46',fontSize:'13px'}}>Nessun movimento.</div>
+              : state.movimenti.map(m=>(
+                <div key={m.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 13px',background:'#111118',border:'1px solid #1c1c24',borderRadius:'10px'}}>
+                  <div>
+                    <div style={{fontSize:'12px',color:'#a1a1aa'}}>{m.nota}</div>
+                    <div style={{fontSize:'10px',color:'#52525b'}}>
+                      {m.da!=='esterno'?nomiConti[m.da]:'Esterno'} → {nomiConti[m.a]||m.a} · {m.data}
+                    </div>
+                  </div>
+                  <span style={{fontSize:'13px',fontWeight:500,color:m.tipo==='fattura'?'#34d399':'#93c5fd'}}>
+                    {m.tipo==='fattura'?'+':''}{fmt(m.importo)}
+                  </span>
+                </div>
+              ))
+            }
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
